@@ -6,3 +6,4 @@ data/
 outputs/
 *.pt
 *.pth
+.claude/
