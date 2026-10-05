@@ -1,0 +1,15 @@
+# Stage 2 control: continue the stage 1 baseline with bilinear resizing for the same
+# number of epochs and learning rate as the resizer run, so gains are not explained
+# by longer training.
+data:
+  input_size: 224
+model:
+  backbone: resnet50
+  pretrained: false
+  init_checkpoint: outputs/imagenette_resnet50_bilinear/last.pt
+  resizer:
+    type: bilinear
+    output_size: 224
+train:
+  epochs: 10
+  lr: 0.005

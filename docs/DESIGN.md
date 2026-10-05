@@ -67,7 +67,7 @@ A unit test checks that our conv-weight count reproduces this table.
 | Optimizer | SGD, momentum 0.9 |
 | LR | 0.05 from scratch, **0.005 for fine-tuning** |
 | LR schedule | ×0.94 every 2 epochs |
-| Backbone init | Pre-trained baseline (trained with bilinear resizing) |
+| Backbone init | Baseline previously trained on the same dataset with bilinear resizing |
 | Resizer init | Random |
 | Data | Images are first resized (bilinear) to a fixed resizer-input resolution so they can be batched. Train and test use the same configuration. |
 | Resolutions | Resizer input ∈ {224, 256, 320, 368, 448} → output 224 |
@@ -92,20 +92,31 @@ A unit test checks that our conv-weight count reproduces this table.
 | Environment | Docker only (all installs and runs happen inside the container) |
 | Hardware target | Single RTX 4070 Laptop GPU (8 GB) |
 
-Full ImageNet training is out of scope for this hardware. Imagenette keeps the paper's
-setting (ImageNet-pretrained backbones fine-tuned with a new resizer) at a feasible
-cost.
+Full ImageNet training is out of scope for this hardware.
 
 ### Imagenette notes
 
-- 10 classes, about 9.5K train / 3.9K val images. Folder names are ImageNet WNIDs.
+- 10 classes, 9,469 train / 3,925 val images. Folder names are ImageNet WNIDs.
 - We use the full-size release (`imagenette2.tgz`) rather than `imagenette2-320`.
   With the 320 release (shorter side 320), a 368 or 448 resizer input would require
-  up-sampling.
-- Imagenette images are part of the ImageNet train set, so ImageNet-pretrained
-  backbones have seen them. Absolute accuracy will be high. We care about the
-  **relative** difference between bilinear and learnable resizers under identical
-  conditions.
+  up-sampling for every image. Even in the full-size release, the median shorter side
+  is about 375 px and about 46% of images are shorter than 368 px. ImageNet has a
+  similar size distribution.
+- A few images are grayscale, so the pipeline converts every image to RGB.
+
+### Why backbones are trained from scratch
+
+Imagenette images are part of the ImageNet train set. A smoke test showed that an
+ImageNet-pretrained ResNet-50 reaches **99.4% val top-1 after one epoch** at 368 → 224.
+That ceiling leaves no room to measure a resizer effect.
+
+We therefore keep the paper's protocol and swap the dataset only. In the paper the
+backbone is first trained on the target dataset (ImageNet) with bilinear resizing.
+It is then jointly fine-tuned with a randomly initialized resizer. Here:
+
+1. **Stage 1**: train the backbone **from scratch on Imagenette** with bilinear
+   resizing (224 → 224), lr 0.05.
+2. **Stage 2**: initialize from stage 1 and fine-tune jointly with the resizer, lr 0.005.
 
 ---
 
@@ -189,14 +200,16 @@ class ResizerClassifier(nn.Module):
 
 **Normalization happens before the resizer** (ImageNet mean/std, applied in the data
 transform). Because of the image skip connection, the resizer output starts as
-"bilinear-resized normalized image + learned residual". The pre-trained backbone
-therefore receives the input distribution it expects. This differs from the Keras
-example, which feeds `[0, 1]` images and trains the backbone from scratch.
+"bilinear-resized normalized image + learned residual". The stage 1 backbone
+therefore receives the input distribution it was trained on. This differs from the
+Keras example, which feeds `[0, 1]` images and trains backbone and resizer from
+scratch together.
 
 ### 4.4 Backbones
 
-torchvision models with ImageNet weights and a replaced classification head
-(10 classes):
+torchvision models with a replaced classification head (10 classes). ImageNet
+weights are optional (`model.pretrained`). The main protocol trains from scratch
+(Section 2).
 
 | Paper model | Ours |
 |---|---|
@@ -230,21 +243,30 @@ choice is configurable in YAML.
 |---|---|
 | Loss | `nn.CrossEntropyLoss(label_smoothing=0.1)` |
 | Optimizer | SGD, momentum 0.9, weight decay 1e-4 (BN and bias excluded) |
-| LR | 0.005 (fine-tune) |
-| Schedule | `StepLR(step_size=2, gamma=0.94)` (paper); configurable |
+| LR | 0.05 (stage 1, from scratch) / 0.005 (stage 2, fine-tune) |
+| Schedule | ×0.94 every 2 epochs (paper), applied per step. Optional linear warmup (`train.warmup_epochs`): 2 epochs for stage 1, 0 otherwise |
 | Precision | AMP (bf16 if supported, else fp16 + GradScaler), `channels_last` |
 | Batch size | Fixed across resolutions where memory allows (paper reduced it with resolution; recorded as a deviation) |
 | Metrics | Top-1 / Top-5 accuracy, loss, resizer + backbone params, GFLOPs |
 | Logging | TensorBoard scalars + periodic image grids of resizer outputs |
 | Checkpoints | `outputs/<run_name>/{last,best}.pt` + resolved config YAML |
 
-Paper protocol on Imagenette:
+Paper protocol on Imagenette (see Section 2):
 
-1. **Baseline**: fine-tune ImageNet-pretrained ResNet-50 with `BilinearResizer`, 224 → 224.
-2. **Proposed**: initialize the backbone from step 1's checkpoint and the resizer
-   randomly. Jointly train `S_in → 224` for `S_in ∈ {224, 256, 320, 368, 448}`.
-3. **Fair control**: continue training the baseline for the same number of extra
-   epochs as step 2. Any gain then cannot be attributed to longer training.
+| Run | Config | Init | Resizer | LR | Epochs |
+|---|---|---|---|---|---|
+| Stage 1 baseline | `imagenette_resnet50_bilinear.yaml` | random | bilinear 224 → 224 | 0.05 (2-epoch warmup) | 40 |
+| Stage 2 proposed | `imagenette_resnet50_resizer.yaml` | stage 1 `last.pt` | learnable `S_in` → 224 | 0.005 | 10 |
+| Stage 2 control | `imagenette_resnet50_bilinear_continued.yaml` | stage 1 `last.pt` | bilinear 224 → 224 | 0.005 | 10 |
+
+- Stage 2 starts from `last.pt` rather than `best.pt`, so no checkpoint is selected
+  on the validation set.
+- The control run trains for the same extra epochs at the same LR. Any gain of the
+  proposed run then cannot be attributed to longer training.
+- The resolution sweep uses `S_in ∈ {224, 256, 320, 368, 448}`. Pass
+  `--opts data.input_size=<S_in> run_name=<name>` to select one.
+- We report both final-epoch and best val top-1. The final-epoch value is the primary
+  metric.
 
 ---
 
@@ -254,7 +276,7 @@ Paper protocol on Imagenette:
 |---|---|---|
 | 1 | Docker environment + Imagenette download | GPU visible in container, dataset under `data/imagenette2` |
 | 2 | `LearnableResizer` + tests | Shapes for up/down-scaling, Table 2 param counts reproduced |
-| 3 | Training pipeline (config, data, engine, TensorBoard) | Baseline ResNet-50 run converges on Imagenette |
+| 3 | Training pipeline (config, data, engine, TensorBoard) | Stage 1 ResNet-50 baseline (scratch) converges on Imagenette |
 | 4 | Main comparison | Bilinear vs learned for 368 → 224 (+ resolution sweep) |
 | 5 | Analysis | Fig. 4/6-style visualizations, `r`/`n` ablation, `zero_init_last` ablation, other backbones |
 | 6 (optional) | IQA on AVA with EMD loss (`d = 2`) | — |
@@ -287,9 +309,12 @@ docker compose -f docker/docker-compose.yml up tensorboard
 
 ## 9. Known deviations from the paper
 
-- Imagenette (10 classes) instead of ImageNet-1k. Backbones are ImageNet-pretrained.
+- Imagenette (10 classes) instead of ImageNet-1k. Backbones are trained from scratch
+  on Imagenette instead of ImageNet (Section 2).
 - No Inception-v2 backbone (not in torchvision).
 - Batch size is not reduced with resolution unless memory requires it.
 - Augmentation is not specified in the paper. We use standard RandomResizedCrop + flip.
+- Stage 1 uses a 2-epoch linear LR warmup. Without it, ResNet-50 from scratch at
+  lr 0.05 diverged in the first epoch (train loss up to 6.6) and stalled near chance.
 - The paper mentions a "Sigmoid" on logits, but its Eq. (1) is a softmax cross-entropy
   with smoothed labels. We use softmax cross-entropy.

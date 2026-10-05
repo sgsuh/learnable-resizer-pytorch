@@ -1,0 +1,14 @@
+# Stage 2 proposed: learnable resizer (368 -> 224) jointly fine-tuned with the backbone
+# initialized from the stage 1 baseline. The resizer is randomly initialized (paper Sec. 4).
+data:
+  input_size: 368
+model:
+  backbone: resnet50
+  pretrained: false
+  init_checkpoint: outputs/imagenette_resnet50_bilinear/last.pt
+  resizer:
+    type: learnable
+    output_size: 224
+train:
+  epochs: 10
+  lr: 0.005  # paper: 0.005 for fine-tuning

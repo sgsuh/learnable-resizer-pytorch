@@ -1,0 +1,14 @@
+# Stage 1 baseline: ResNet-50 trained from scratch on Imagenette with plain bilinear
+# resizing (224 -> 224). Plays the role of the paper's ImageNet-trained baseline.
+data:
+  input_size: 224
+model:
+  backbone: resnet50
+  pretrained: false
+  resizer:
+    type: bilinear
+    output_size: 224
+train:
+  epochs: 40
+  lr: 0.05  # paper: 0.05 when training from scratch
+  warmup_epochs: 2  # not in the paper; avoids early divergence from scratch
