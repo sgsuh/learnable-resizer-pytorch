@@ -48,6 +48,9 @@ ResBlock(z): Conv3x3(n) → BN → LReLU → Conv3x3(n) → BN → (+ z)
 
 Table 2 counts **conv kernel weights only**. It excludes bias and BN parameters.
 For example, `n=32, r=1` → 4704 + 1024 + 9216 + 4704 + 18432 = 38,080 = "38.08K".
+Values are truncated rather than rounded, e.g. `n=16, r=3` → 21,088 = "21.08K".
+With bias and BN affine parameters, the default `n=16, r=1` resizer has 12,035
+trainable parameters. This matches the Keras example's trainable count.
 
 | filters \ blocks | r=1   | r=2   | r=3   | r=4   |
 |------------------|-------|-------|-------|-------|
