@@ -1,0 +1,4 @@
+pyyaml
+tensorboard
+matplotlib
+pytest
