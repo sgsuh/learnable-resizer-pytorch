@@ -152,6 +152,8 @@ def main() -> None:
             config=cfg,
         )
         save_checkpoint(run_dir / "last.pt", **state)
+        if train_cfg["save_epoch_checkpoints"]:
+            save_checkpoint(run_dir / f"epoch_{epoch:02d}.pt", model=model.state_dict(), epoch=epoch, config=cfg)
         if is_best:
             save_checkpoint(run_dir / "best.pt", **state)
 

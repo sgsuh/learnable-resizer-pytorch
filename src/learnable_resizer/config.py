@@ -58,6 +58,7 @@ DEFAULTS: dict[str, Any] = {
         "channels_last": True,
         "log_interval": 50,  # steps
         "num_log_images": 8,  # resizer output samples logged to TensorBoard per epoch
+        "save_epoch_checkpoints": False,  # also keep model-only epoch_XX.pt for every epoch
     },
 }
 
