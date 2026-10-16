@@ -63,11 +63,77 @@ resizer448  seed0  86.7 85.7 72.6 86.7 87.0 87.2 87.4 86.3 87.5 87.1
    All of these are within run-to-run noise. The paper reports +1.7 pp for ResNet-50
    (368 → 224) on ImageNet.
 2. **Learnable-resizer runs have sporadic val drops** that the bilinear runs never show
-   (82–85% in several runs, 72.6% for 448). They recover in the next epoch. Train
-   accuracy shows no matching drop, so this is likely an evaluation-mode effect. Two
-   candidates are the resizer's BatchNorm running statistics and large swings in the
-   resizer output scale. Not yet diagnosed.
+   (82–85% in several runs, 72.6% for 448). They recover in the next epoch, and train
+   accuracy shows no matching drop. The cause is stale backbone BatchNorm running
+   statistics; see "Diagnosis: eval-mode val drops" below.
 3. **No resolution trend.** The paper finds input > output generally helps. Here
    224–448 inputs are indistinguishable given the noise.
 4. **The backbone is heavily overfit** (train ~97% vs val ~87%). The task may also be
    too coarse (10 easy classes at 224 px) for resize quality to matter.
+
+## Diagnosis: eval-mode val drops
+
+Five learnable-resizer runs were repeated with `train.save_epoch_checkpoints=true`, and
+every epoch checkpoint was analyzed with `scripts/diagnose.py`. For each checkpoint, val
+top-1 is measured with the stored BN running statistics (`eval`) and after recomputing
+them on 50 train batches (3,200 images). The recomputation covers the resizer BNs only,
+the backbone BNs only, or both. The script also records how large the learned residual
+is: resizer output minus plain bilinear resize, on 64 val images.
+
+One standard error at 87% on 3,925 images is about 0.5 pp. Only differences above
+about 1 pp are meaningful. Exact `eval` numbers can differ by about 0.05 pp from the
+training log because bf16 inference is not deterministic.
+
+### Per-epoch val top-1: stored vs recomputed backbone BN statistics
+
+```
+368 seed1          eval   81.7 85.3 87.6 87.2 87.3 86.8 85.4 87.1 87.4 87.4
+                   recal  86.8 86.5 87.5 87.6 87.5 87.5 86.7 87.6 87.6 87.0
+448 seed0          eval   83.4 87.4 86.9 86.3 87.4 88.1 87.2 87.1 87.6 87.5
+                   recal  85.5 87.2 88.1 87.1 87.1 88.1 87.9 87.6 87.4 87.5
+368 zero-init s0   eval   86.4 86.4 87.4 86.3 86.9 87.2 87.2 85.5 87.7 87.5
+                   recal  87.3 86.6 87.8 87.2 87.0 87.4 87.3 86.7 87.4 87.5
+368 zero-init s1   eval   82.0 80.9 86.4 87.4 86.9 86.1 88.0 87.3 85.9 87.5
+                   recal  86.3 86.1 86.7 87.7 87.1 86.9 87.2 87.1 87.4 87.8
+368 zero-init s2   eval   86.2 87.0 86.2 87.2 86.8 87.3 87.1 85.2 87.2 86.0
+                   recal  86.8 87.1 87.1 87.9 87.5 87.5 87.5 87.3 87.1 87.5
+```
+
+### Summary per run
+
+| run | min top-1 (eval / recal backbone / recal resizer / recal all) | last-3 mean (eval / recal all) | residual RMS |
+|---|---|---|---|
+| 368 seed1 | 81.68 / 86.55 / 83.08 / 86.65 | 87.33 / 87.45 | 2.73–3.42 |
+| 448 seed0 | 83.41 / 85.45 / 84.00 / 85.22 | 87.40 / 87.55 | 2.20–3.34 |
+| 368 zero-init seed0 | 85.53 / 86.57 / 84.92 / 86.37 | 86.90 / 87.23 | 2.93–3.91 |
+| 368 zero-init seed1 | 80.87 / 86.14 / 84.89 / 86.68 | 86.86 / 87.37 | 6.00–6.88 |
+| 368 zero-init seed2 | 85.25 / 86.78 / 86.14 / 86.68 | 86.14 / 87.37 | 1.93–2.40 |
+
+For reference, the plain bilinear resize output has std 1.12 (normalized pixels).
+
+### Findings
+
+1. **Recomputing the backbone BN statistics removes most drops.** Examples:
+   - 368 seed1, epoch 0: 81.7 → 86.8
+   - zero-init seed1, epoch 1: 80.9 → 86.1
+   - zero-init seed2, epoch 7: 85.2 → 87.3
+
+   Recomputing only the resizer BNs helps much less. The one exception is 368 seed1,
+   epoch 6, where both recomputations recover the drop. The drops come from the
+   running statistics (EMA, momentum 0.1) lagging behind a resizer whose output
+   distribution is still moving.
+2. **The learned residual is large.** Its RMS is 2–7, i.e. 2–6× the scale of the
+   bilinear image it is added to. So the backbone sees a re-scaled, substantially
+   different input, not "bilinear plus a small correction". Small changes in the
+   resizer, or in its BN statistics, shift the backbone input distribution
+   noticeably. Switching the resizer's BNs from running to batch statistics changes
+   its output by RMS 0.4–1.7.
+3. **`zero_init_last=true` does not help.** The residual reaches RMS 1.9–6.1 within
+   the first epoch, and drops still occur. The run with the largest residual
+   (seed1) has the deepest drops.
+4. **Likely root cause (not tested):** nothing constrains the residual scale. The
+   ResNet stem normalizes its input scale (conv → BN), so a growing residual costs
+   almost no loss.
+5. **The drops do not explain the missing gain.** With all BN statistics recomputed,
+   the last-3 mean is 87.2–87.6 for every run. That matches the bilinear control
+   (87.36 ± 0.23).
