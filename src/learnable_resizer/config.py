@@ -62,6 +62,9 @@ DEFAULTS: dict[str, Any] = {
         # > 0: before each eval, recompute the running statistics of every BN (resizer and
         # backbone) on this many train batches; the uncalibrated eval is logged as val_raw_*.
         "bn_recal_batches": 0,
+        "resizer_lr_scale": 1.0,  # learnable resizer parameters use lr * this factor
+        # > 0: add this weight x mean squared residual (resizer output - plain resize) to the loss.
+        "residual_l2": 0.0,
     },
 }
 

@@ -238,3 +238,38 @@ Last-3 mean val top-1, 3 seeds:
 3. A plausible cause is the unconstrained residual scale (RMS 2–7, i.e. 2–6× the
    image, see the diagnosis above): the backbone, already trained on bilinear inputs,
    has to adapt to a substantially different input distribution within 10 epochs.
+
+## Residual scale ablation (368 → 128)
+
+`scripts/run_residual_ablation.sh`. Same setup as the 128 comparison (stage 1 bilinear
+128 checkpoint, BN recalibration), with the learned residual constrained in different
+ways. New options: `train.resizer_lr_scale` (resizer parameters use lr × scale) and
+`train.residual_l2` (adds weight × mean squared residual to the loss). Residual RMS is
+now logged every epoch (`resizer_residual_rms` in `metrics.jsonl`, one val batch, eval
+mode, after recalibration); the plain resize output has std 1.12.
+
+| variant | seeds | last-3 mean top-1 | worst epoch | final train top-1 | residual RMS (last 3) |
+|---|---|---|---|---|---|
+| bilinear skip path, no residual (`skip368`) | 3 | **85.17 ± 0.31** | 84.61 ± 0.27 | 96.29 ± 0.15 | 0 |
+| unconstrained (`resizer368`) | 3 | 84.54 ± 0.08 | 83.42 ± 0.49 | 95.91 ± 0.14 | – |
+| unconstrained (`res368_free`, RMS reference) | 1 | 84.62 | 83.87 | 96.09 | 4.36 |
+| resizer lr × 0.1 | 3 | 84.89 ± 0.18 | 84.31 ± 0.08 | 95.98 ± 0.20 | 0.97 ± 0.33 |
+| resizer lr × 0.01 | 3 | 84.85 ± 0.13 | 84.08 ± 0.13 | 96.00 ± 0.27 | 0.66 ± 0.17 |
+| residual L2 0.01 | 3 | 84.78 ± 0.36 | 84.00 ± 0.45 | 95.81 ± 0.22 | 0.46 ± 0.15 |
+| residual L2 0.1 | 3 | 84.99 ± 0.24 | 84.50 ± 0.10 | 96.08 ± 0.23 | 0.08 ± 0.01 |
+| zero-init + resizer lr × 0.01 | 3 | 84.91 ± 0.15 | 84.47 ± 0.06 | 96.04 ± 0.30 | 0.10 ± 0.05 |
+
+### Findings
+
+1. **Unconstrained, the residual grows to RMS 4.4**, about 4× the image it is added to
+   (2.6 after the first epoch), as in the 224 runs.
+2. **Every constraint shrinks the residual and recovers part of the loss.** RMS drops to
+   0.08–0.97 and the last-3 mean rises from 84.54 to 84.78–84.99; the worst epoch also
+   improves (83.4 → 84.0–84.5).
+3. **No variant beats the plain skip path.** The best variants are 0.18–0.26 below it,
+   within about one standard error with 3 seeds. Accuracy approaches the bilinear
+   result as the residual approaches zero, and none of the settings finds a residual
+   that helps.
+4. Conclusion for this setup (Imagenette, ResNet-50 from a bilinear stage 1, 10 epoch
+   stage 2): the large unconstrained residual explains the loss below bilinear, but a
+   constrained residual does not give a gain either.

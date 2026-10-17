@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from learnable_resizer.config import add_config_args, load_config, save_config
 from learnable_resizer.data import build_dataloaders, build_recal_loader
-from learnable_resizer.diagnostics import batch_norms, recalibrate_bn
+from learnable_resizer.diagnostics import batch_norms, recalibrate_bn, resizer_output_stats
 from learnable_resizer.engine import Precision, evaluate, train_one_epoch
 from learnable_resizer.models import LearnableResizer, build_model
 from learnable_resizer.utils import (
@@ -79,7 +79,9 @@ def main() -> None:
 
     criterion = nn.CrossEntropyLoss(label_smoothing=train_cfg["label_smoothing"])
     optimizer = torch.optim.SGD(
-        param_groups(model, train_cfg["weight_decay"]), lr=train_cfg["lr"], momentum=train_cfg["momentum"]
+        param_groups(model, train_cfg["weight_decay"], train_cfg["lr"], train_cfg["resizer_lr_scale"]),
+        lr=train_cfg["lr"],
+        momentum=train_cfg["momentum"],
     )
     scheduler = build_lr_scheduler(
         optimizer,
@@ -111,9 +113,9 @@ def main() -> None:
         recal_bns = list(batch_norms(model).values())
 
     num_log_images = train_cfg["num_log_images"]
-    log_images = None
-    if isinstance(model.resizer, LearnableResizer) and num_log_images > 0:
-        log_images = next(iter(val_loader))[0][:num_log_images].to(device)
+    learnable = isinstance(model.resizer, LearnableResizer)
+    probe_images = next(iter(val_loader))[0].to(device) if learnable else None
+    log_images = probe_images[:num_log_images] if learnable and num_log_images > 0 else None
 
     for epoch in range(start_epoch, train_cfg["epochs"]):
         train_stats = train_one_epoch(
@@ -128,6 +130,7 @@ def main() -> None:
             writer,
             log_interval=train_cfg["log_interval"],
             channels_last=train_cfg["channels_last"],
+            residual_l2=train_cfg["residual_l2"],
         )
         val_stats = evaluate(model, val_loader, criterion, precision, device, train_cfg["channels_last"])
         raw_val_stats = None
@@ -161,6 +164,12 @@ def main() -> None:
             writer.add_scalar(f"val/{key}", value, epoch)
         for key, value in (raw_val_stats or {}).items():
             writer.add_scalar(f"val_raw/{key}", value, epoch)
+        resizer_stats = {}
+        if learnable:  # eval mode, after any BN recalibration
+            with precision.autocast():
+                resizer_stats = resizer_output_stats(model.resizer, probe_images)
+            for key in ("residual_rms", "naive_std", "out_std"):
+                writer.add_scalar(f"resizer/{key}", resizer_stats[key], epoch)
         if log_images is not None:
             model.eval()
             grid = resizer_comparison_grid(model.resizer, log_images, data_cfg["mean"], data_cfg["std"])
@@ -171,6 +180,7 @@ def main() -> None:
             record = {"epoch": epoch, **{f"train_{k}": v for k, v in train_stats.items()}}
             record.update({f"val_{k}": v for k, v in val_stats.items()})
             record.update({f"val_raw_{k}": v for k, v in (raw_val_stats or {}).items()})
+            record.update({f"resizer_{k}": v for k, v in resizer_stats.items()})
             f.write(json.dumps(record) + "\n")
 
         state = dict(

@@ -40,16 +40,25 @@ def topk_correct(logits: Tensor, targets: Tensor, ks: tuple[int, ...] = (1, 5)) 
     return [int(hits[:, :k].any(dim=1).sum()) for k in ks]
 
 
-def param_groups(model: nn.Module, weight_decay: float) -> list[dict[str, Any]]:
-    """Apply weight decay to conv/linear weights only, not to biases or norm parameters."""
-    decay, no_decay = [], []
+def param_groups(
+    model: nn.Module, weight_decay: float, lr: float, resizer_lr_scale: float = 1.0
+) -> list[dict[str, Any]]:
+    """Apply weight decay to conv/linear weights only, not to biases or norm parameters.
+    Parameters of ``model.resizer`` (if any) use ``lr * resizer_lr_scale``. Backbone groups
+    come first, so ``param_groups[0]`` always has the base lr."""
+    resizer = getattr(model, "resizer", None)
+    resizer_ids = {id(p) for p in resizer.parameters()} if resizer is not None else set()
+    groups: dict[tuple[bool, bool], list[nn.Parameter]] = {}
     for p in model.parameters():
-        if not p.requires_grad:
-            continue
-        (no_decay if p.ndim <= 1 else decay).append(p)
+        if p.requires_grad:
+            groups.setdefault((id(p) in resizer_ids, p.ndim <= 1), []).append(p)
     return [
-        {"params": decay, "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0.0},
+        {
+            "params": params,
+            "weight_decay": 0.0 if no_decay else weight_decay,
+            "lr": lr * resizer_lr_scale if is_resizer else lr,
+        }
+        for (is_resizer, no_decay), params in sorted(groups.items(), key=lambda kv: kv[0])
     ]
 
 

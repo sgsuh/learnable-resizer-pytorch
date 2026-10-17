@@ -31,3 +31,8 @@ def test_invalid_overrides(override):
 
 def test_bn_recal_disabled_by_default():
     assert load_config()["train"]["bn_recal_batches"] == 0
+
+
+def test_residual_constraints_off_by_default():
+    train = load_config()["train"]
+    assert train["resizer_lr_scale"] == 1.0 and train["residual_l2"] == 0.0
