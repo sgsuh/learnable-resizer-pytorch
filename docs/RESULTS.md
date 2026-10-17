@@ -172,3 +172,43 @@ without CUDA unless `--allow-cpu` is given.
 3. **There is still no gain from the learnable resizer at 224 output.** The last-3
    means are 87.31 ± 0.18 vs 87.34 ± 0.05, well within noise. The conclusion of the
    main comparison holds with the drops removed.
+
+## Lower backbone resolution (128 and 160)
+
+`scripts/run_lowres.sh`. For each output size, a new stage 1 bilinear baseline is
+trained from scratch at that size (same recipe as the 224 baseline). Stage 2 then
+compares, from that checkpoint, the bilinear control at the output size with the
+learnable resizer (368→128, 448→160), with `train.bn_recal_batches=50` in both arms.
+
+| stage 1 baseline | final top-1 | best top-1 | GFLOPs |
+|---|---|---|---|
+| bilinear 128 | 81.10 | 83.18 | 2.67 |
+| bilinear 160 | 82.90 | 83.82 | 4.17 |
+
+### Stage 2 (3 seeds, mean ± std)
+
+| metric | bilinear 128 | learnable 368→128 | bilinear 160 | learnable 448→160 |
+|---|---|---|---|---|
+| final epoch | 85.17 ± 0.64 | 84.24 ± 0.21 | 86.41 ± 0.24 | 85.94 ± 0.32 |
+| last-3 mean | **85.26 ± 0.32** | 84.54 ± 0.08 | **86.41 ± 0.30** | 85.93 ± 0.21 |
+| best | 85.65 ± 0.29 | 85.08 ± 0.22 | 86.74 ± 0.27 | 86.23 ± 0.30 |
+| worst epoch | 84.70 ± 0.31 | 83.42 ± 0.49 | 85.91 ± 0.08 | 84.29 ± 1.26 |
+| worst epoch, stored BN stats (`val_raw`) | 84.45 ± 0.31 | 77.20 ± 5.16 | 85.67 ± 0.04 | 79.97 ± 3.85 |
+| final train top-1 | 96.39 ± 0.26 | 95.91 ± 0.14 | 96.36 ± 0.19 | 95.89 ± 0.20 |
+| GFLOPs | 2.67 | 3.68 | 4.17 | 5.69 |
+
+### Findings
+
+1. **The learnable resizer is worse at lower resolution.** Last-3 mean: −0.72 at 128
+   and −0.48 at 160, both about two seed standard deviations. This is the opposite of
+   the +7 points reported by the Keras example at 150 px. Train accuracy is also
+   slightly lower, so this is not more overfitting.
+2. **Lower resolution makes the task sensitive to resolution, as intended.** The
+   bilinear control drops from 87.34 (224) to 86.41 (160) and 85.26 (128).
+3. **The two arms differ in more than the learned residual.** The control's images are
+   resized once by the data pipeline (antialiased) directly to the output size. The
+   resizer's skip path resizes 368→128 (or 448→160) with plain bilinear and
+   `antialias=False` (paper / TF2 behaviour), a 2.8–2.9× downscale that aliases. A
+   control with the same skip path but no residual (`model.resizer.type=bilinear`,
+   `data.input_size=368`) is needed to tell whether the residual helps or hurts
+   relative to its own skip path.
