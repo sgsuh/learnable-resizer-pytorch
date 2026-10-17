@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_args(parser)
     parser.add_argument("--resume", action="store_true", help="Resume from <run_dir>/last.pt.")
+    parser.add_argument("--allow-cpu", action="store_true", help="Train on CPU when CUDA is unavailable.")
     return parser.parse_args()
 
 
@@ -51,6 +52,10 @@ def main() -> None:
     save_config(cfg, run_dir / "config.yaml")
 
     set_seed(cfg["seed"])
+    if not torch.cuda.is_available() and not args.allow_cpu:
+        # Under WSL the GPU occasionally disappears from new processes; fail fast instead
+        # of silently training ~10x slower in fp32.
+        raise RuntimeError("CUDA is not available; pass --allow-cpu to train on CPU")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.backends.cudnn.benchmark = True
 

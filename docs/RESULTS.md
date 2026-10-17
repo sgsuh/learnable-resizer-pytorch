@@ -137,3 +137,38 @@ For reference, the plain bilinear resize output has std 1.12 (normalized pixels)
 5. **The drops do not explain the missing gain.** With all BN statistics recomputed,
    the last-3 mean is 87.2–87.6 for every run. That matches the bilinear control
    (87.36 ± 0.23).
+
+## Stage 2 with BN recalibration before every eval
+
+Same protocol as the main comparison, plus `train.bn_recal_batches=50`: before each
+eval, the running statistics of every BN layer (resizer and backbone) are recomputed
+on 50 train batches. Applied to both arms (for the bilinear control only the backbone
+has BNs). Run names `s2bn_*`; `val_raw_*` in `metrics.jsonl` is the eval with the
+stored (EMA) statistics.
+
+`s2bn_resizer368_seed2` first started without a visible GPU (WSL driver glitch) and
+fell back to CPU fp32; it was stopped and rerun on GPU. `train.py` now refuses to run
+without CUDA unless `--allow-cpu` is given.
+
+### Main comparison (3 seeds, mean ± std)
+
+| metric | bilinear 224 | learnable 368→224 |
+|---|---|---|
+| final epoch | 87.19 ± 0.13 | 87.36 ± 0.29 |
+| last-3 mean | 87.34 ± 0.05 | 87.31 ± 0.18 |
+| best | 87.83 ± 0.19 | 87.76 ± 0.19 |
+| worst epoch | 86.93 ± 0.13 | 86.61 ± 0.23 |
+| last-3 mean, stored BN stats (`val_raw`) | 87.42 ± 0.13 | 86.75 ± 0.45 |
+| worst epoch, stored BN stats (`val_raw`) | 86.66 ± 0.25 | 77.27 ± 4.62 |
+
+### Findings
+
+1. **Recalibration removes the drops.** The worst recalibrated epoch of every resizer
+   run is ≥ 86.3, while the same runs evaluated with stored statistics still drop to
+   73.7–82.5. The seed variance of the resizer arm shrinks from 0.88 to 0.18 (last-3
+   mean, compared with the `s2_*` runs).
+2. **It does not change the bilinear control.** Recalibrated and stored-statistics
+   evals differ by at most ±0.8 per epoch, and the last-3 means agree (87.34 vs 87.42).
+3. **There is still no gain from the learnable resizer at 224 output.** The last-3
+   means are 87.31 ± 0.18 vs 87.34 ± 0.05, well within noise. The conclusion of the
+   main comparison holds with the drops removed.
