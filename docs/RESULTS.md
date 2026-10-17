@@ -212,3 +212,29 @@ learnable resizer (368→128, 448→160), with `train.bn_recal_batches=50` in bo
    control with the same skip path but no residual (`model.resizer.type=bilinear`,
    `data.input_size=368`) is needed to tell whether the residual helps or hurts
    relative to its own skip path.
+
+### Same-skip-path controls
+
+`scripts/run_skip_control.sh`. Bilinear models that see exactly the resizer's input and
+skip path but have no learned residual (`model.resizer.type=bilinear`,
+`data.input_size=368/448`), from the same stage 1 checkpoints, with BN recalibration.
+Last-3 mean val top-1, 3 seeds:
+
+| arm | output 128 (input 368) | output 160 (input 448) |
+|---|---|---|
+| bilinear, resized in the data pipeline (antialiased) | 85.26 ± 0.32 | 86.41 ± 0.30 |
+| bilinear skip path, antialias on (`skip*aa`) | 85.19 ± 0.36 | 86.25 ± 0.13 |
+| bilinear skip path, antialias off (`skip*`) | 85.17 ± 0.31 | 86.41 ± 0.16 |
+| learnable resizer (skip path + residual) | 84.54 ± 0.08 | 85.93 ± 0.21 |
+
+1. **Aliasing is not the issue.** All three plain bilinear variants agree within
+   0.16 points, although the antialias-off skip path downscales 2.8–2.9× without a
+   low-pass filter.
+2. **The learned residual itself costs accuracy.** Against its own skip path it is
+   −0.63 at 128 and −0.48 at 160 (each about 3 standard errors with 3 seeds), with
+   slightly lower train accuracy as well. So the resizer's residual degrades the
+   backbone input rather than helping, at every output size where there is a
+   measurable effect.
+3. A plausible cause is the unconstrained residual scale (RMS 2–7, i.e. 2–6× the
+   image, see the diagnosis above): the backbone, already trained on bilinear inputs,
+   has to adapt to a substantially different input distribution within 10 epochs.
