@@ -69,3 +69,17 @@ def build_dataloaders(data_cfg: dict[str, Any], batch_size: int) -> tuple[DataLo
     val_loader = DataLoader(val_set, shuffle=False, drop_last=False, **common)
     return train_loader, val_loader
 
+
+def build_recal_loader(train_loader: DataLoader, generator: torch.Generator) -> DataLoader:
+    """Loader over the train set for BN recalibration. It shuffles with its own
+    ``generator`` (so the training order and global RNG are unaffected) and does not keep
+    workers alive, since it is abandoned after a few batches."""
+    return DataLoader(
+        train_loader.dataset,
+        batch_size=train_loader.batch_size,
+        shuffle=True,
+        drop_last=True,
+        num_workers=train_loader.num_workers,
+        pin_memory=True,
+        generator=generator,
+    )

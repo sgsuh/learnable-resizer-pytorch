@@ -59,6 +59,9 @@ DEFAULTS: dict[str, Any] = {
         "log_interval": 50,  # steps
         "num_log_images": 8,  # resizer output samples logged to TensorBoard per epoch
         "save_epoch_checkpoints": False,  # also keep model-only epoch_XX.pt for every epoch
+        # > 0: before each eval, recompute the running statistics of every BN (resizer and
+        # backbone) on this many train batches; the uncalibrated eval is logged as val_raw_*.
+        "bn_recal_batches": 0,
     },
 }
 

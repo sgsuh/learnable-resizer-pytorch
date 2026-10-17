@@ -27,3 +27,7 @@ def test_yaml_and_overrides(tmp_path):
 def test_invalid_overrides(override):
     with pytest.raises((KeyError, TypeError, ValueError)):
         load_config(overrides=[override])
+
+
+def test_bn_recal_disabled_by_default():
+    assert load_config()["train"]["bn_recal_batches"] == 0

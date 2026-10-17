@@ -37,3 +37,23 @@ def test_resizer_output_stats_zero_residual_at_init():
     stats = resizer_output_stats(resizer, torch.randn(2, 3, 8, 8))
     assert stats["residual_rms"] == 0 and stats["eval_vs_batch_bn_rms"] == 0
     assert resizer.training
+
+
+def test_recal_loader_own_rng():
+    from learnable_resizer.data import build_recal_loader
+
+    train_loader = _loader(n=32, batch_size=8)
+    generator = torch.Generator()
+    recal_loader = build_recal_loader(train_loader, generator)
+    assert recal_loader.batch_size == 8 and not recal_loader.persistent_workers
+
+    def first_batch(seed):
+        generator.manual_seed(seed)
+        return next(iter(recal_loader))[0]
+
+    torch.manual_seed(123)
+    expected_next = torch.rand(1)
+    torch.manual_seed(123)
+    a = first_batch(5)
+    assert torch.equal(torch.rand(1), expected_next)  # global RNG untouched
+    assert torch.equal(a, first_batch(5)) and not torch.equal(a, first_batch(6))

@@ -16,7 +16,8 @@ from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
 from learnable_resizer.config import add_config_args, load_config, save_config
-from learnable_resizer.data import build_dataloaders
+from learnable_resizer.data import build_dataloaders, build_recal_loader
+from learnable_resizer.diagnostics import batch_norms, recalibrate_bn
 from learnable_resizer.engine import Precision, evaluate, train_one_epoch
 from learnable_resizer.models import LearnableResizer, build_model
 from learnable_resizer.utils import (
@@ -98,6 +99,12 @@ def main() -> None:
     for key, value in stats.items():
         writer.add_scalar(f"model/{key}", value, 0)
 
+    bn_recal_batches = train_cfg["bn_recal_batches"]
+    if bn_recal_batches > 0:
+        recal_generator = torch.Generator()
+        recal_loader = build_recal_loader(train_loader, recal_generator)
+        recal_bns = list(batch_norms(model).values())
+
     num_log_images = train_cfg["num_log_images"]
     log_images = None
     if isinstance(model.resizer, LearnableResizer) and num_log_images > 0:
@@ -118,13 +125,28 @@ def main() -> None:
             channels_last=train_cfg["channels_last"],
         )
         val_stats = evaluate(model, val_loader, criterion, precision, device, train_cfg["channels_last"])
+        raw_val_stats = None
+        if bn_recal_batches > 0:
+            raw_val_stats = val_stats
+            recal_generator.manual_seed(cfg["seed"] * 1000 + epoch)  # reproducible across --resume
+            recalibrate_bn(
+                model,
+                recal_bns,
+                recal_loader,
+                bn_recal_batches,
+                device,
+                precision.autocast,
+                train_cfg["channels_last"],
+            )
+            val_stats = evaluate(model, val_loader, criterion, precision, device, train_cfg["channels_last"])
 
         is_best = val_stats["top1"] > best_top1
         best_top1 = max(best_top1, val_stats["top1"])
         print(
             f"epoch {epoch} | train loss {train_stats['loss']:.4f} top1 {train_stats['top1']:.2f} "
             f"| val loss {val_stats['loss']:.4f} top1 {val_stats['top1']:.2f} top5 {val_stats['top5']:.2f} "
-            f"| best {best_top1:.2f} | {train_stats['time']:.0f}s",
+            + (f"(raw {raw_val_stats['top1']:.2f}) " if raw_val_stats else "")
+            + f"| best {best_top1:.2f} | {train_stats['time']:.0f}s",
             flush=True,
         )
 
@@ -132,6 +154,8 @@ def main() -> None:
             writer.add_scalar(f"train/{key}", value, epoch)
         for key, value in val_stats.items():
             writer.add_scalar(f"val/{key}", value, epoch)
+        for key, value in (raw_val_stats or {}).items():
+            writer.add_scalar(f"val_raw/{key}", value, epoch)
         if log_images is not None:
             model.eval()
             grid = resizer_comparison_grid(model.resizer, log_images, data_cfg["mean"], data_cfg["std"])
@@ -141,6 +165,7 @@ def main() -> None:
         with open(run_dir / "metrics.jsonl", "a") as f:
             record = {"epoch": epoch, **{f"train_{k}": v for k, v in train_stats.items()}}
             record.update({f"val_{k}": v for k, v in val_stats.items()})
+            record.update({f"val_raw_{k}": v for k, v in (raw_val_stats or {}).items()})
             f.write(json.dumps(record) + "\n")
 
         state = dict(
